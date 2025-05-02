@@ -1,0 +1,106 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+02-component-guidelines
+# Component Development Guidelines
+
+## Component Structure
+- Each component should be a TypeScript file with `.tsx` extension
+- Use named exports for components
+- Include prop interface definitions
+- Implement proper error boundaries where necessary
+
+## Styling Guidelines
+1. **TailwindCSS Usage**
+   - Use utility classes for styling
+   - Create custom classes in `globals.css` only when necessary
+   - Follow mobile-first responsive design
+   - Use Tailwind's dark mode utilities with `dark:` prefix
+
+2. **shadcn/ui Integration**
+   - Install base components using npx shadcn@latest add
+   - Customize components in `components/ui`
+   - Maintain consistent styling across shadcn components
+   - Use shadcn's color variables for theming
+   - Extend components rather than modify source
+
+3. **Responsive Design**
+   ```tsx
+   // Example responsive class usage
+   className="
+     w-full           // Mobile base
+     md:w-1/2        // Tablet
+     lg:w-1/3        // Desktop
+     p-4             // Base padding
+     md:p-6          // Larger padding on tablet+
+     text-sm         // Base font size
+     md:text-base    // Larger font on tablet+
+   "
+   ```
+
+4. **Animation Implementation**
+   - **Visually engaging yet purposeful animations:** Animations should significantly enhance the user experience and provide clear, satisfying feedback without being distracting.
+   - **Modern and Interactive Feel:** Actively use animations (transitions, layout animations, micro-interactions) to make the interface feel responsive, polished, and alive.
+   - **Performance-optimized Framer Motion implementations:** Ensure animations remain smooth and efficient, especially during interactions and data updates.
+   - **Leverage Framer Motion features:** Utilize capabilities like layout animations, springs, staggers, and gestures for richer, more dynamic effects where appropriate.
+   - **Respect reduced-motion preferences:** Always implement fallbacks or disable complex animations for users who prefer reduced motion (`useReducedMotion` hook or CSS media queries).
+
+   ```tsx
+   // Example Framer Motion usage for a dynamic entrance
+   const listVariants = {
+     hidden: { opacity: 0 },
+     visible: {
+       opacity: 1,
+       transition: {
+         staggerChildren: 0.1, // Stagger animation for child elements
+         when: "beforeChildren",
+       }
+     }
+   };
+
+   const itemVariants = {
+      hidden: { y: 20, opacity: 0 },
+      visible: {
+        y: 0,
+        opacity: 1,
+        transition: { type: "spring", stiffness: 100 } // Use a spring effect
+      }
+   };
+   ```
+
+5. **Component Template**
+   ```tsx
+   import { motion } from 'framer-motion'; // Ensure motion is imported
+
+   interface ComponentProps {
+     // Props definition
+   }
+
+   export function Component({ prop1, prop2 }: ComponentProps) {
+     // Component logic
+
+     return (
+       <motion.div
+         variants={/* Define variants like itemVariants above */}
+         initial="hidden"
+         animate="visible"
+         exit="hidden" // Add exit animations if needed
+         layout // Animate layout changes smoothly
+         className="responsive-classes"
+       >
+         {/* Component content */}
+       </motion.div>
+     );
+   }
+   ```
+
+## Best Practices
+- Implement proper loading states (consider animated skeletons or spinners).
+- Handle error states gracefully with clear visual feedback.
+- Use semantic HTML elements.
+- Ensure keyboard navigation support.
+- Test components across different screen sizes.
+- Maintain consistent spacing using Tailwind's spacing scale.
+- Use CSS Grid or Flexbox for complex layouts, considering layout animations.

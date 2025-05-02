@@ -1,0 +1,54 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+01-project-overview
+# Hardware Testing Dashboard - Project Overview
+
+This NextJS application serves as a web dashboard for hardware testing during robotics prototyping, specifically designed for ESP32 integration. The application follows these key principles:
+
+## Core Technologies
+- Next.js 14+ with App Router
+- shadcn/ui for component library
+- Framer Motion for animations
+- TailwindCSS for styling
+- ESP32 communication layer
+
+## Design Principles
+1. **Responsive Design**
+   - Mobile-first approach
+   - Fluid layouts that adapt to all screen sizes
+   - Touch-friendly interface elements
+   - Minimum target size of 44px for interactive elements
+
+2. **Color System**
+   - Default to dark theme using gray-900 through gray-600
+   - Light theme support with appropriate contrast
+   - Color variables defined in `tailwind.config.js`
+
+3. **Component Architecture**
+   - Atomic design methodology
+   - Reusable components in `/components`
+   - Layout components in `/components/layout`
+   - Page-specific components in respective page directories
+
+4. **Animation Guidelines**
+   - **Visually engaging animations** to enhance user experience and provide clear feedback.
+   - Use Framer Motion for dynamic transitions, layout animations, and micro-interactions.
+   - Prioritize performance and smoothness.
+   - Respect reduced-motion preferences.
+
+5. **Hardware Integration**
+   - Clear connection status indicators
+   - Error handling and retry mechanisms
+   - Real-time data updates
+   - Fallback states for disconnected scenarios
+
+## Key Directories
+- `/app` - Next.js app router pages and layouts
+- `/components` - Reusable UI components
+- `/lib` - Utility functions and hardware communication
+- `/styles` - Global styles and theme configuration
+- `/public` - Static assets
+- `/types` - TypeScript type definitions

@@ -1,0 +1,56 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Hardware Integration Guidelines
+
+## ESP32 Communication
+- WebSocket connection for real-time data
+- REST endpoints for configuration
+- Proper error handling and reconnection logic
+- Status indicators for connection state
+
+## Data Flow Architecture
+```typescript
+// Example data flow structure
+interface HardwareState {
+  connected: boolean;
+  lastPing: number;
+  sensors: {
+    [key: string]: {
+      value: number;
+      timestamp: number;
+      status: 'normal' | 'warning' | 'error';
+    };
+  };
+}
+```
+
+## Connection States
+1. **Disconnected**
+   - Show reconnection button
+   - Display last known values with timestamp
+   - Clear indication of offline status
+
+2. **Connecting**
+   - Loading indicators
+   - Progress feedback
+   - Timeout handling
+
+3. **Connected**
+   - Real-time data updates
+   - Visual confirmation of connection
+   - Performance monitoring
+
+## Error Handling
+- Connection timeouts
+- Data validation
+- Automatic retry with exponential backoff
+- User feedback for all error states
+
+## Performance Considerations
+- Throttle high-frequency updates
+- Batch updates when possible
+- Implement proper cleanup on unmount
+- Monitor memory usage
