@@ -13,6 +13,8 @@ export interface ConfiguredComponent {
   pins: number[];
   minAngle?: number;
   maxAngle?: number;
+  maxSpeed?: number; // For stepper motors
+  acceleration?: number; // For stepper motors
 }
 
 export interface HardwareConfig {

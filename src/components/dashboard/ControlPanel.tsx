@@ -35,6 +35,11 @@ interface ControlPanelProps {
   sendMessage: (message: object) => void;
   componentState: number | boolean | string | undefined;
   onUpdateLimits: (id: string, min: number, max: number) => void;
+  onUpdateStepperParams?: (
+    id: string,
+    maxSpeed: number,
+    acceleration: number
+  ) => void;
 }
 
 export function ControlPanel({
@@ -45,6 +50,7 @@ export function ControlPanel({
   sendMessage,
   componentState,
   onUpdateLimits,
+  onUpdateStepperParams,
 }: ControlPanelProps) {
   const backdropVariants = {
     hidden: { opacity: 0 },
@@ -97,43 +103,6 @@ export function ControlPanel({
   const [stepperCurrentPosition, setStepperCurrentPosition] = useState<
     number | null
   >(null);
-  const [isMovingContinuously, setIsMovingContinuously] = useState<
-    "forward" | "backward" | null
-  >(null);
-
-  useEffect(() => {
-    // Reset servo state when component changes
-    if (component && component.type === "Servo") {
-      setServoAngle(90); // Default to center
-      setMinAngle(component.minAngle ?? 0); // Use saved or default 0
-      setMaxAngle(component.maxAngle ?? 180); // Use saved or default 180
-      setIsAttached(true); // Assume attached by default
-    } else if (component?.type === "Digital Output") {
-      if (typeof componentState === "boolean") {
-        setOutputState(componentState);
-      } else if (componentState === 1) {
-        setOutputState(true);
-      } else if (componentState === 0) {
-        setOutputState(false);
-      } else {
-        setOutputState(false);
-      }
-    } else if (component?.type === "Stepper") {
-      setStepperSteps("200");
-      setStepperMaxSpeed("1000");
-      setStepperAcceleration("500");
-      setStepperUseAccel(true);
-      setIsMovingContinuously(null);
-      if (typeof componentState === "number") {
-        setStepperCurrentPosition(componentState);
-      } else {
-        setStepperCurrentPosition(null);
-      }
-    }
-    if (component?.type === "Stepper" && typeof componentState === "number") {
-      setStepperCurrentPosition(componentState);
-    }
-  }, [component, componentState]);
 
   const handleAngleChange = (value: number) => {
     const clampedValue = Math.max(minAngle, Math.min(maxAngle, value));
@@ -182,9 +151,73 @@ export function ControlPanel({
     const speed = parseFloat(stepperMaxSpeed);
     const accel = parseFloat(stepperAcceleration);
     if (isNaN(speed) || isNaN(accel)) return;
+
+    // Update the component with new speed and acceleration values
+    if (component && onUpdateStepperParams) {
+      onUpdateStepperParams(component.id, speed, accel);
+    }
+
     sendStepperCommand({ command: "setConfig", speed, accel });
     console.log(`Stepper SetConfig: Speed=${speed}, Accel=${accel}`);
-  }, [sendStepperCommand, stepperMaxSpeed, stepperAcceleration]);
+  }, [
+    sendStepperCommand,
+    stepperMaxSpeed,
+    stepperAcceleration,
+    component,
+    onUpdateStepperParams,
+  ]);
+
+  // Effect to initialize state when the component changes
+  useEffect(() => {
+    if (!component) return;
+
+    switch (component.type) {
+      case "Servo":
+        setServoAngle(90);
+        setMinAngle(component.minAngle ?? 0);
+        setMaxAngle(component.maxAngle ?? 180);
+        setIsAttached(true);
+        break;
+      case "Digital Output":
+        setOutputState(
+          componentState === true || componentState === 1 ? true : false
+        );
+        break;
+      case "Stepper":
+        // Only reset steps input and config on component change
+        setStepperSteps("200");
+        setStepperMaxSpeed(component.maxSpeed?.toString() || "1000");
+        setStepperAcceleration(component.acceleration?.toString() || "500");
+        // Optionally, decide if useAccel should also persist or reset here
+        // setStepperUseAccel(true); // Keeping this commented, assuming user intent persists
+        // Position is handled in the next effect
+        break;
+      // Add cases for other component types if they need initialization
+    }
+  }, [component]); // Dependency: Only run when the component changes
+
+  // Effect to update dynamic state like position based on componentState
+  useEffect(() => {
+    if (component?.type === "Stepper") {
+      if (typeof componentState === "number") {
+        setStepperCurrentPosition(componentState);
+      } else {
+        // Keep existing position if state is invalid, or set to null
+        // setStepperCurrentPosition(null); // Or maybe retain the last known value?
+      }
+    } else if (component?.type === "Digital Output") {
+      // Update output state if componentState changes externally
+      if (typeof componentState === "boolean") {
+        setOutputState(componentState);
+      } else if (componentState === 1) {
+        setOutputState(true);
+      } else if (componentState === 0) {
+        setOutputState(false);
+      }
+      // No explicit 'else' to avoid overriding user toggle if state is undefined
+    }
+    // Add other component types if their componentState needs tracking
+  }, [component, componentState]); // Dependency: Update when component or its state changes
 
   const handleStepperMove = useCallback(() => {
     const steps = parseInt(stepperSteps, 10);
@@ -192,32 +225,6 @@ export function ControlPanel({
     sendStepperCommand({ command: "move", steps });
     console.log(`Stepper Move: Steps=${steps}`);
   }, [sendStepperCommand, stepperSteps]);
-
-  const handleStepperContinuous = useCallback(
-    (direction: "forward" | "backward") => {
-      setIsMovingContinuously(direction);
-      handleStepperSetConfig();
-      setTimeout(() => {
-        sendStepperCommand({ command: "run", direction });
-        console.log(`Stepper Run: Direction=${direction}`);
-      }, 100);
-    },
-    [sendStepperCommand, handleStepperSetConfig]
-  );
-
-  const handleStepperStop = useCallback(() => {
-    setIsMovingContinuously(null);
-    sendStepperCommand({ command: "stop" });
-    console.log("Stepper Stop");
-  }, [sendStepperCommand]);
-
-  const handleStepperEnableToggle = useCallback(
-    (enable: boolean) => {
-      sendStepperCommand({ command: enable ? "enable" : "disable" });
-      console.log(`Stepper ${enable ? "Enable" : "Disable"}`);
-    },
-    [sendStepperCommand]
-  );
 
   const renderStepperControls = () => (
     <div className="space-y-6">
@@ -312,7 +319,10 @@ export function ControlPanel({
                 className="flex-1"
               />
               <Button
-                onClick={handleStepperMove}
+                onClick={() => {
+                  handleStepperSetConfig();
+                  setTimeout(handleStepperMove, 100);
+                }}
                 className="bg-blue-600 text-white hover:bg-blue-700"
               >
                 Move
@@ -322,30 +332,65 @@ export function ControlPanel({
 
           <div>
             <Label className="block text-sm font-medium mb-1">
-              Continuous Move
+              Quick Steps
             </Label>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-5 gap-2">
               <Button
-                onClick={() => handleStepperContinuous("backward")}
-                disabled={isMovingContinuously === "backward"}
-                className="flex-1 bg-gray-500 text-white hover:bg-gray-600 flex items-center justify-center gap-1 disabled:opacity-50"
+                variant="outline"
+                onClick={() => {
+                  handleStepperSetConfig();
+                  setTimeout(() => {
+                    sendStepperCommand({ command: "move", steps: -100 });
+                  }, 100);
+                }}
               >
-                <ChevronLeft size={18} /> Backward
+                -100
               </Button>
               <Button
-                onClick={handleStepperStop}
-                disabled={!isMovingContinuously}
-                variant="destructive"
-                className="flex-1 flex items-center justify-center gap-1 disabled:opacity-50"
+                variant="outline"
+                onClick={() => {
+                  handleStepperSetConfig();
+                  setTimeout(() => {
+                    sendStepperCommand({ command: "move", steps: -10 });
+                  }, 100);
+                }}
               >
-                <StopCircle size={18} /> Stop
+                -10
               </Button>
               <Button
-                onClick={() => handleStepperContinuous("forward")}
-                disabled={isMovingContinuously === "forward"}
-                className="flex-1 bg-gray-500 text-white hover:bg-gray-600 flex items-center justify-center gap-1 disabled:opacity-50"
+                variant="outline"
+                onClick={() => {
+                  handleStepperSetConfig();
+                  setTimeout(() => {
+                    if (stepperCurrentPosition !== null) {
+                      sendStepperCommand({ command: "moveTo", position: 0 });
+                    }
+                  }, 100);
+                }}
               >
-                Forward <ChevronRight size={18} />
+                Home
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  handleStepperSetConfig();
+                  setTimeout(() => {
+                    sendStepperCommand({ command: "move", steps: 10 });
+                  }, 100);
+                }}
+              >
+                +10
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  handleStepperSetConfig();
+                  setTimeout(() => {
+                    sendStepperCommand({ command: "move", steps: 100 });
+                  }, 100);
+                }}
+              >
+                +100
               </Button>
             </div>
           </div>

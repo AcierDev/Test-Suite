@@ -1,8 +1,8 @@
-#include <AccelStepper.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <AsyncEventSource.h>
 #include <ESP32Servo.h>
+#include <FastAccelStepper.h>
 #include <WiFi.h>
 
 #include <map>
@@ -11,6 +11,9 @@
 
 const char *ssid = "Everwood";
 const char *password = "Everwood-Staff";
+
+// FastAccelStepper engine setup
+FastAccelStepperEngine engine = FastAccelStepperEngine();
 
 // --- Pin Configuration ---
 struct IoPinConfig {
@@ -44,12 +47,12 @@ struct StepperConfig {
   String name;
   uint8_t pulPin;
   uint8_t dirPin;
-  std::unique_ptr<AccelStepper> stepper = nullptr;
+  FastAccelStepper *stepper = nullptr;
   long currentPosition = 0;
   long targetPosition = 0;
   float maxSpeed = 1000.0;
   float acceleration = 500.0;
-  unsigned long lastPositionReportTime = 0;  // For throttling position updates
+  unsigned long lastPositionReportTime = 0;
 };
 
 std::vector<StepperConfig> configuredSteppers;
@@ -316,18 +319,22 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
               newConfig.pulPin = pulPin;
               newConfig.dirPin = dirPin;
 
-              // Create AccelStepper instance
-              // Using DRIVER mode (1) for PUL/DIR interfaces
-              newConfig.stepper.reset(
-                  new AccelStepper(AccelStepper::DRIVER, pulPin, dirPin));
+              // Create FastAccelStepper instance
+              newConfig.stepper = engine.stepperConnectToPin(pulPin);
+              if (newConfig.stepper) {
+                newConfig.stepper->setDirectionPin(dirPin);
+                // Set initial parameters
+                newConfig.stepper->setSpeedInHz(
+                    newConfig.maxSpeed);  // Hz instead of steps/second
+                newConfig.stepper->setAcceleration(newConfig.acceleration);
+                // Enable higher speeds by setting auto-enable to false
+                newConfig.stepper->setAutoEnable(false);
 
-              // Set initial parameters (can be overridden by setConfig command)
-              newConfig.stepper->setMaxSpeed(newConfig.maxSpeed);
-              newConfig.stepper->setAcceleration(newConfig.acceleration);
-              newConfig.stepper->setMinPulseWidth(20);
-
-              configuredSteppers.push_back(
-                  std::move(newConfig));  // Use std::move for unique_ptr
+                configuredSteppers.push_back(newConfig);
+              } else {
+                client->text("ERROR: Failed to create stepper on pin");
+                return;
+              }
             }
             client->text("OK: Stepper configured");
 
@@ -346,55 +353,65 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
             }
 
             if (strcmp(command, "setConfig") == 0) {
-              if (doc.containsKey("speed"))
-                stepper->stepper->setMaxSpeed(doc["speed"].as<float>());
-              if (doc.containsKey("accel"))
-                stepper->stepper->setAcceleration(doc["accel"].as<float>());
-              Serial.printf("Stepper %s: Set speed=%.2f, accel=%.2f\n",
-                            id.c_str(), stepper->stepper->maxSpeed(),
-                            stepper->stepper->acceleration());
+              if (doc.containsKey("speed")) {
+                float speed = doc["speed"].as<float>();
+                // Store the requested speed value
+                stepper->maxSpeed = speed;
+                // Set the speed in Hz (steps per second)
+                stepper->stepper->setSpeedInHz(speed);
+
+                // If speed is very high, make sure auto-enable is off
+                if (speed > 5000) {
+                  stepper->stepper->setAutoEnable(false);
+                }
+
+                Serial.printf("Stepper %s: Set speed to %.2f Hz\n", id.c_str(),
+                              speed);
+              }
+              if (doc.containsKey("accel")) {
+                float accel = doc["accel"].as<float>();
+                stepper->stepper->setAcceleration(accel);
+                stepper->acceleration = accel;
+
+                Serial.printf("Stepper %s: Set acceleration to %.2f steps/s²\n",
+                              id.c_str(), accel);
+              }
+              Serial.printf(
+                  "Stepper %s: Config updated (speed=%.2f Hz, accel=%.2f "
+                  "steps/s²)\n",
+                  id.c_str(), stepper->maxSpeed, stepper->acceleration);
               client->text("OK: Stepper config updated");
             } else if (strcmp(command, "move") == 0) {
               if (doc.containsKey("steps")) {
                 long steps = doc["steps"].as<long>();
+                // Get current position first
+                long currentPos = stepper->stepper->getCurrentPosition();
+                // Move relative from current position
                 stepper->stepper->move(steps);
-                stepper->targetPosition =
-                    stepper->stepper->targetPosition();  // Update local target
-                Serial.printf("Stepper %s: Moving relative %ld steps\n",
-                              id.c_str(), steps);
+                stepper->targetPosition = currentPos + steps;
+
+                Serial.printf(
+                    "Stepper %s: Moving relative %ld steps (speed=%.2f, "
+                    "accel=%.2f)\n",
+                    id.c_str(), steps, stepper->maxSpeed,
+                    stepper->acceleration);
                 client->text("OK: Stepper move initiated");
               }
             } else if (strcmp(command, "moveTo") == 0) {
               if (doc.containsKey("position")) {
                 long pos = doc["position"].as<long>();
                 stepper->stepper->moveTo(pos);
-                stepper->targetPosition =
-                    stepper->stepper->targetPosition();  // Update local target
-                Serial.printf("Stepper %s: Moving to absolute %ld\n",
-                              id.c_str(), pos);
+                stepper->targetPosition = pos;
+
+                Serial.printf(
+                    "Stepper %s: Moving to absolute %ld (speed=%.2f, "
+                    "accel=%.2f)\n",
+                    id.c_str(), pos, stepper->maxSpeed, stepper->acceleration);
                 client->text("OK: Stepper moveTo initiated");
               }
-            } else if (strcmp(command, "run") == 0) {
-              // Continuous run - speed must be set via setConfig first
-              float speedToRun = stepper->stepper->maxSpeed();
-              if (doc.containsKey("direction") &&
-                  strcmp(doc["direction"].as<const char *>(), "backward") ==
-                      0) {
-                speedToRun = -speedToRun;
-              }
-              stepper->stepper->setSpeed(speedToRun);
-              // AccelStepper doesn't have a run() that uses acceleration for
-              // continuous, use runSpeed()
-              Serial.printf("Stepper %s: Running continuously at speed %.2f\n",
-                            id.c_str(), speedToRun);
-              client->text("OK: Stepper run initiated");
             } else if (strcmp(command, "stop") == 0) {
-              stepper->stepper->stop();  // Hard stop with deceleration
-              stepper->targetPosition =
-                  stepper->stepper
-                      ->currentPosition();  // Update target to current
-              Serial.printf("Stepper %s: Stop requested\n", id.c_str());
-              client->text("OK: Stepper stop initiated");
+              stepper->stepper->forceStop();
+              client->text("OK: Stepper stopped");
             } else {
               client->text("ERROR: Unknown stepper command");
             }
@@ -406,9 +423,9 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
               if (it->id == id) {
                 Serial.printf("Removing stepper ID %s\n", id.c_str());
                 if (it->stepper) {
-                  it->stepper->stop();  // Stop before removing
+                  it->stepper->forceStop();  // Stop before removing
                 }
-                // unique_ptr handles deletion automatically when erased
+                // FastAccelStepper is managed by the engine, no need to delete
                 configuredSteppers.erase(it);
                 client->text("OK: Stepper removed");
                 break;
@@ -445,6 +462,9 @@ void setup() {
     delay(500);
     Serial.print(".");
   }
+
+  // Initialize FastAccelStepper engine
+  engine.init();
 
   Serial.print("IP_READY:");
   Serial.println(WiFi.localIP());
@@ -491,17 +511,15 @@ void loop() {
   // --- Run Steppers ---
   for (auto &stepperConfig : configuredSteppers) {
     if (stepperConfig.stepper) {
-      // Mandatory: Always call run() for AccelStepper to work.
-      // It handles moving towards a target or executing runSpeed commands
-      // internally.
-      stepperConfig.stepper->run();
+      unsigned long now = millis();
+
+      // FastAccelStepper doesn't need a run() call in the loop
 
       // Check and report position periodically
       if (now - stepperConfig.lastPositionReportTime >=
           stepperPositionReportInterval) {
-        long currentPos = stepperConfig.stepper->currentPosition();
-        if (currentPos !=
-            stepperConfig.currentPosition) {  // Report only if changed
+        long currentPos = stepperConfig.stepper->getCurrentPosition();
+        if (currentPos != stepperConfig.currentPosition) {
           stepperConfig.currentPosition = currentPos;
           stepperConfig.lastPositionReportTime = now;
 
@@ -513,12 +531,10 @@ void loop() {
           String output;
           serializeJson(updateDoc, output);
           ws.textAll(output);
-          // Serial.printf("Stepper %s Pos: %ld\n", stepperConfig.id.c_str(),
-          // currentPos);
         }
       }
     }
   }
 
-  delay(1);  // Very small delay is okay, AccelStepper needs frequent calls
+  delay(1);  // Small delay is okay, FastAccelStepper uses hardware timers
 }

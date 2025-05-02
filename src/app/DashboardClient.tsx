@@ -463,66 +463,91 @@ export default function DashboardClient() {
     (event: MessageEvent) => {
       console.log("WebSocket message received:", event.data);
       try {
-        const message = JSON.parse(event.data);
-
-        // Process message based on its type/content
+        // First, check if it's likely JSON before parsing
         if (
-          message.type === "pinUpdate" &&
-          message.id &&
-          message.state !== undefined
+          event.data &&
+          typeof event.data === "string" &&
+          event.data.startsWith("{")
         ) {
-          console.log(`Updating state for pin ${message.id}: ${message.state}`);
-          setComponentStates((prevStates) => ({
-            ...prevStates,
-            [message.id]: message.state,
-          }));
-        } else if (
-          message.type === "relayUpdate" &&
-          message.id &&
-          message.state !== undefined
-        ) {
-          console.log(
-            `Updating state for relay ${message.id}: ${message.state}`
-          );
-          setComponentStates((prevStates) => ({
-            ...prevStates,
-            [message.id]: message.state,
-          }));
-        } else if (
-          message.type === "sensorUpdate" &&
-          message.id &&
-          message.value !== undefined
-        ) {
-          console.log(
-            `Updating value for sensor ${message.id}: ${message.value}`
-          );
-          setComponentStates((prevStates) => ({
-            ...prevStates,
-            [message.id]: message.value,
-          }));
-        } else if (
-          message.type === "stepperUpdate" &&
-          message.id &&
-          message.position !== undefined
-        ) {
-          console.log(
-            `Updating position for stepper ${message.id}: ${message.position}`
-          );
-          setComponentStates((prevStates) => ({
-            ...prevStates,
-            [message.id]: message.position,
-          }));
-        } else {
-          console.log("Received unhandled message type:", message.type);
+          const message = JSON.parse(event.data);
+
+          // Process message based on its type/content
+          if (
+            message.type === "pinUpdate" &&
+            message.id &&
+            message.state !== undefined
+          ) {
+            console.log(
+              `Updating state for pin ${message.id}: ${message.state}`
+            );
+            setComponentStates((prevStates) => ({
+              ...prevStates,
+              [message.id]: message.state,
+            }));
+          } else if (
+            message.type === "relayUpdate" &&
+            message.id &&
+            message.state !== undefined
+          ) {
+            console.log(
+              `Updating state for relay ${message.id}: ${message.state}`
+            );
+            setComponentStates((prevStates) => ({
+              ...prevStates,
+              [message.id]: message.state,
+            }));
+          } else if (
+            message.type === "sensorUpdate" &&
+            message.id &&
+            message.value !== undefined
+          ) {
+            console.log(
+              `Updating value for sensor ${message.id}: ${message.value}`
+            );
+            setComponentStates((prevStates) => ({
+              ...prevStates,
+              [message.id]: message.value,
+            }));
+          } else if (
+            message.type === "stepperUpdate" &&
+            message.id &&
+            message.position !== undefined
+          ) {
+            console.log(
+              `Updating position for stepper ${message.id}: ${message.position}`
+            );
+            setComponentStates((prevStates) => ({
+              ...prevStates,
+              [message.id]: message.position,
+            }));
+          } else {
+            console.log("Received unhandled JSON message type:", message.type);
+          }
+        } else if (typeof event.data === "string") {
+          // Handle non-JSON string messages (like OK: or ERROR:)
+          console.log("Received text message from ESP32:", event.data);
+          if (event.data.startsWith("ERROR:")) {
+            // Optionally display these errors more prominently
+            setErrorMessage(event.data);
+            setTimeout(() => setErrorMessage(""), 5000); // Clear after 5s
+          } else if (event.data.startsWith("OK:")) {
+            // Optionally show temporary info messages
+            // setInfoMessage(event.data);
+            // setTimeout(() => setInfoMessage(""), 1500);
+          }
         }
       } catch (error) {
-        console.error("Failed to parse WebSocket message:", error);
+        console.error(
+          "Failed to process WebSocket message:",
+          event.data,
+          error
+        );
       }
     },
-    [setComponentStates]
-  ); // Added missing dependency
+    [setComponentStates, setErrorMessage] // Added setErrorMessage dependency
+  );
 
-  // --- WebSocket Connection Logic ---
+  // --- WebSocket Connection Logic --- // <-- Fix dependency array here too
   const handleConnect = useCallback(
     (lastOctet: string) => {
       if (ws.current && ws.current.readyState === WebSocket.OPEN) {
@@ -577,7 +602,16 @@ export default function DashboardClient() {
         setIsFetchingIp(true); // Reset fetching state
       }
     },
-    [connectionStatus, handleWebSocketMessage, syncConfigWithESP32] // Add syncConfig dependency
+    [
+      // Add all necessary dependencies
+      setAppStage,
+      setConnectionStatus,
+      setErrorMessage,
+      setInfoMessage,
+      setIsFetchingIp,
+      syncConfigWithESP32,
+      handleWebSocketMessage,
+    ]
   );
 
   // --- Effects ---
@@ -890,6 +924,29 @@ export default function DashboardClient() {
       );
       setInfoMessage(
         "Servo limits updated locally. Save configuration to persist."
+      );
+      setTimeout(() => setInfoMessage(""), 3000);
+    },
+    [] // No dependencies needed as it only uses setters and IDs/values
+  );
+
+  // --- Callback to update stepper parameters in local state ---
+  const handleStepperParamUpdate = useCallback(
+    (id: string, maxSpeed: number, acceleration: number) => {
+      setHardwareConfig((prev) => {
+        const newSteppers = prev.steppers.map((stepper) => {
+          if (stepper.id === id) {
+            return { ...stepper, maxSpeed, acceleration };
+          }
+          return stepper;
+        });
+        return { ...prev, steppers: newSteppers };
+      });
+      console.log(
+        `Updated parameters for stepper ${id} locally: speed=${maxSpeed}, accel=${acceleration}`
+      );
+      setInfoMessage(
+        "Stepper parameters updated locally. Save configuration to persist."
       );
       setTimeout(() => setInfoMessage(""), 3000);
     },
@@ -1754,14 +1811,15 @@ export default function DashboardClient() {
               isOpen={isControlPanelOpen}
               onClose={closeControlPanel}
               component={selectedComponent}
+              activeGroup={activeGroup}
               componentState={
                 selectedComponent
                   ? componentStates[selectedComponent.id]
                   : undefined
               }
-              activeGroup={activeGroup}
               sendMessage={sendMessage}
-              onUpdateLimits={handleServoLimitUpdate} // Pass the callback
+              onUpdateLimits={handleServoLimitUpdate}
+              onUpdateStepperParams={handleStepperParamUpdate}
             />
             <div className="space-y-6">
               <AnimatePresence mode="wait">
