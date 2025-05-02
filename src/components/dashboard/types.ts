@@ -11,6 +11,8 @@ export interface ConfiguredComponent {
   name: string;
   type: string;
   pins: number[];
+  minAngle?: number;
+  maxAngle?: number;
 }
 
 export interface HardwareConfig {

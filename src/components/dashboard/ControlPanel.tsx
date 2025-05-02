@@ -1,5 +1,14 @@
-import { useState, useEffect } from "react";
-import { X, ChevronLeft, ChevronRight, Power, PowerOff } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import {
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Power,
+  PowerOff,
+  StopCircle,
+  Play,
+  Settings2,
+} from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ConfiguredComponent, ComponentGroup } from "./types";
 
@@ -25,6 +34,7 @@ interface ControlPanelProps {
   activeGroup: ComponentGroup;
   sendMessage: (message: object) => void;
   componentState: number | boolean | string | undefined;
+  onUpdateLimits: (id: string, min: number, max: number) => void;
 }
 
 export function ControlPanel({
@@ -34,6 +44,7 @@ export function ControlPanel({
   activeGroup,
   sendMessage,
   componentState,
+  onUpdateLimits,
 }: ControlPanelProps) {
   const backdropVariants = {
     hidden: { opacity: 0 },
@@ -78,14 +89,25 @@ export function ControlPanel({
   const [maxAngle, setMaxAngle] = useState<number>(180);
   const [isAttached, setIsAttached] = useState<boolean>(true);
 
+  // State for Stepper Controls
+  const [stepperSteps, setStepperSteps] = useState<string>("200");
+  const [stepperMaxSpeed, setStepperMaxSpeed] = useState<string>("1000");
+  const [stepperAcceleration, setStepperAcceleration] = useState<string>("500");
+  const [stepperUseAccel, setStepperUseAccel] = useState<boolean>(true);
+  const [stepperCurrentPosition, setStepperCurrentPosition] = useState<
+    number | null
+  >(null);
+  const [isMovingContinuously, setIsMovingContinuously] = useState<
+    "forward" | "backward" | null
+  >(null);
+
   useEffect(() => {
     // Reset servo state when component changes
     if (component && component.type === "Servo") {
       setServoAngle(90); // Default to center
-      setMinAngle(0); // Default limits
-      setMaxAngle(180);
+      setMinAngle(component.minAngle ?? 0); // Use saved or default 0
+      setMaxAngle(component.maxAngle ?? 180); // Use saved or default 180
       setIsAttached(true); // Assume attached by default
-      // TODO: Later, potentially load initial angle/limits/attached state from component data or componentState if provided
     } else if (component?.type === "Digital Output") {
       if (typeof componentState === "boolean") {
         setOutputState(componentState);
@@ -96,12 +118,28 @@ export function ControlPanel({
       } else {
         setOutputState(false);
       }
+    } else if (component?.type === "Stepper") {
+      setStepperSteps("200");
+      setStepperMaxSpeed("1000");
+      setStepperAcceleration("500");
+      setStepperUseAccel(true);
+      setIsMovingContinuously(null);
+      if (typeof componentState === "number") {
+        setStepperCurrentPosition(componentState);
+      } else {
+        setStepperCurrentPosition(null);
+      }
     }
-  }, [component, componentState]); // Add componentState dependency if needed for servo later
+    if (component?.type === "Stepper" && typeof componentState === "number") {
+      setStepperCurrentPosition(componentState);
+    }
+  }, [component, componentState]);
 
   const handleAngleChange = (value: number) => {
     const clampedValue = Math.max(minAngle, Math.min(maxAngle, value));
     setServoAngle(clampedValue);
+    // Return the value for immediate use
+    return clampedValue;
   };
 
   const sendServoCommand = (command: string | number) => {
@@ -126,109 +164,214 @@ export function ControlPanel({
     sendServoCommand(attach ? "attach" : "detach");
   };
 
+  // Stepper Control Handlers
+  const sendStepperCommand = useCallback(
+    (commandPayload: object) => {
+      if (!component) return;
+      sendMessage({
+        action: "control",
+        componentGroup: "steppers",
+        id: component.id,
+        ...commandPayload,
+      });
+    },
+    [component, sendMessage]
+  );
+
+  const handleStepperSetConfig = useCallback(() => {
+    const speed = parseFloat(stepperMaxSpeed);
+    const accel = parseFloat(stepperAcceleration);
+    if (isNaN(speed) || isNaN(accel)) return;
+    sendStepperCommand({ command: "setConfig", speed, accel });
+    console.log(`Stepper SetConfig: Speed=${speed}, Accel=${accel}`);
+  }, [sendStepperCommand, stepperMaxSpeed, stepperAcceleration]);
+
+  const handleStepperMove = useCallback(() => {
+    const steps = parseInt(stepperSteps, 10);
+    if (isNaN(steps)) return;
+    sendStepperCommand({ command: "move", steps });
+    console.log(`Stepper Move: Steps=${steps}`);
+  }, [sendStepperCommand, stepperSteps]);
+
+  const handleStepperContinuous = useCallback(
+    (direction: "forward" | "backward") => {
+      setIsMovingContinuously(direction);
+      handleStepperSetConfig();
+      setTimeout(() => {
+        sendStepperCommand({ command: "run", direction });
+        console.log(`Stepper Run: Direction=${direction}`);
+      }, 100);
+    },
+    [sendStepperCommand, handleStepperSetConfig]
+  );
+
+  const handleStepperStop = useCallback(() => {
+    setIsMovingContinuously(null);
+    sendStepperCommand({ command: "stop" });
+    console.log("Stepper Stop");
+  }, [sendStepperCommand]);
+
+  const handleStepperEnableToggle = useCallback(
+    (enable: boolean) => {
+      sendStepperCommand({ command: enable ? "enable" : "disable" });
+      console.log(`Stepper ${enable ? "Enable" : "Disable"}`);
+    },
+    [sendStepperCommand]
+  );
+
   const renderStepperControls = () => (
     <div className="space-y-6">
-      <Switch id="accel-toggle" label="Use Acceleration" />
-
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label
-            htmlFor="max-speed"
-            className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
-          >
-            Max Speed (steps/s)
-          </label>
-          <Input id="max-speed" type="number" defaultValue="1000" />
-        </div>
-        <div>
-          <label
-            htmlFor="acceleration"
-            className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
-          >
-            Acceleration (steps/s²)
-          </label>
-          <Input id="acceleration" type="number" defaultValue="500" />
-        </div>
-      </div>
-
-      <div>
-        <label
-          htmlFor="move-steps"
-          className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
-        >
-          Move Steps
-        </label>
-        <div className="flex gap-2">
-          <Input
-            id="move-steps"
-            type="number"
-            placeholder="Enter steps"
-            defaultValue="200"
-            className="flex-1"
-          />
-          <Button className="bg-blue-600 text-white hover:bg-blue-700">
-            Move
-          </Button>
-        </div>
-      </div>
-
-      <div>
-        <p className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Continuous Move
-        </p>
-        <div className="flex gap-2">
-          <Button className="flex-1 bg-gray-500 text-white hover:bg-gray-600 flex items-center justify-center gap-1">
-            <ChevronLeft size={18} /> Backward
-          </Button>
-          <Button className="flex-1 bg-red-600 text-white hover:bg-red-700">
-            Stop
-          </Button>
-          <Button className="flex-1 bg-gray-500 text-white hover:bg-gray-600 flex items-center justify-center gap-1">
-            Forward <ChevronRight size={18} />
-          </Button>
-        </div>
-      </div>
-
-      <div>
-        <p className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Set Boundaries
-        </p>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label
-              htmlFor="min-bound"
-              className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1"
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Configuration</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleStepperSetConfig}
+              title="Apply Speed/Accel Settings"
             >
-              Min Position
-            </label>
-            <Input id="min-bound" type="number" placeholder="None" />
+              <Settings2 className="h-5 w-5" />
+            </Button>
+          </CardTitle>
+          <CardDescription>
+            Set speed and acceleration parameters.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center space-x-2">
+            <Switch
+              id="accel-toggle"
+              checked={stepperUseAccel}
+              onCheckedChange={setStepperUseAccel}
+            />
+            <Label htmlFor="accel-toggle">
+              Use Acceleration (Applied via AccelStepper library)
+            </Label>
           </div>
-          <div>
-            <label
-              htmlFor="max-bound"
-              className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1"
-            >
-              Max Position
-            </label>
-            <Input id="max-bound" type="number" placeholder="None" />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label
+                htmlFor="max-speed"
+                className="block text-sm font-medium mb-1"
+              >
+                Max Speed (steps/s)
+              </Label>
+              <Input
+                id="max-speed"
+                type="number"
+                value={stepperMaxSpeed}
+                onChange={(e) => setStepperMaxSpeed(e.target.value)}
+                onBlur={handleStepperSetConfig}
+                placeholder="e.g., 1000"
+              />
+            </div>
+            <div>
+              <Label
+                htmlFor="acceleration"
+                className="block text-sm font-medium mb-1"
+              >
+                Acceleration (steps/s²)
+              </Label>
+              <Input
+                id="acceleration"
+                type="number"
+                value={stepperAcceleration}
+                onChange={(e) => setStepperAcceleration(e.target.value)}
+                onBlur={handleStepperSetConfig}
+                placeholder="e.g., 500"
+                disabled={!stepperUseAccel}
+              />
+            </div>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="text-center pt-4">
-        <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
-          Current Position
-        </p>
-        <p className="text-2xl font-bold text-gray-900 dark:text-white">
-          --- steps
-        </p>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Movement</CardTitle>
+          <CardDescription>
+            Control relative and continuous movement.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label
+              htmlFor="move-steps"
+              className="block text-sm font-medium mb-1"
+            >
+              Move Relative Steps
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                id="move-steps"
+                type="number"
+                placeholder="Enter steps"
+                value={stepperSteps}
+                onChange={(e) => setStepperSteps(e.target.value)}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleStepperMove}
+                className="bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Move
+              </Button>
+            </div>
+          </div>
+
+          <div>
+            <Label className="block text-sm font-medium mb-1">
+              Continuous Move
+            </Label>
+            <div className="flex gap-2">
+              <Button
+                onClick={() => handleStepperContinuous("backward")}
+                disabled={isMovingContinuously === "backward"}
+                className="flex-1 bg-gray-500 text-white hover:bg-gray-600 flex items-center justify-center gap-1 disabled:opacity-50"
+              >
+                <ChevronLeft size={18} /> Backward
+              </Button>
+              <Button
+                onClick={handleStepperStop}
+                disabled={!isMovingContinuously}
+                variant="destructive"
+                className="flex-1 flex items-center justify-center gap-1 disabled:opacity-50"
+              >
+                <StopCircle size={18} /> Stop
+              </Button>
+              <Button
+                onClick={() => handleStepperContinuous("forward")}
+                disabled={isMovingContinuously === "forward"}
+                className="flex-1 bg-gray-500 text-white hover:bg-gray-600 flex items-center justify-center gap-1 disabled:opacity-50"
+              >
+                Forward <ChevronRight size={18} />
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Status</CardTitle>
+        </CardHeader>
+        <CardContent className="flex items-center justify-around text-center">
+          <div>
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+              Current Position
+            </p>
+            <p className="text-2xl font-bold text-gray-900 dark:text-white">
+              {stepperCurrentPosition ?? "---"} steps
+            </p>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 
   const renderServoControls = () => (
     <div className="space-y-4">
-      {/* Angle Control Card */}
       <Card>
         <CardHeader>
           <CardTitle>Angle Control</CardTitle>
@@ -243,8 +386,11 @@ export function ControlPanel({
               min={minAngle}
               max={maxAngle}
               step={1}
-              value={[servoAngle]} // Slider expects an array
-              onValueChange={(value) => handleAngleChange(value[0])}
+              value={[servoAngle]}
+              onValueChange={(value) => {
+                const newAngle = handleAngleChange(value[0]);
+                sendServoCommand(newAngle);
+              }}
               disabled={!isAttached}
               className="flex-grow disabled:opacity-50 disabled:cursor-not-allowed"
             />
@@ -254,7 +400,9 @@ export function ControlPanel({
               min={minAngle}
               max={maxAngle}
               value={servoAngle}
-              onChange={(e) => handleAngleChange(parseInt(e.target.value, 10))}
+              onChange={(e) =>
+                handleAngleChange(parseInt(e.target.value, 10) || servoAngle)
+              }
               disabled={!isAttached}
               className="w-20 text-center font-mono disabled:opacity-50"
             />
@@ -269,7 +417,6 @@ export function ControlPanel({
         </CardContent>
       </Card>
 
-      {/* Quick Adjustments Card */}
       <Card>
         <CardHeader>
           <CardTitle>Quick Adjustments</CardTitle>
@@ -277,14 +424,20 @@ export function ControlPanel({
         <CardContent className="grid grid-cols-5 gap-2">
           <Button
             variant="outline"
-            onClick={() => handleAngleChange(servoAngle - 5)}
+            onClick={() => {
+              const newAngle = handleAngleChange(servoAngle - 5);
+              sendServoCommand(newAngle);
+            }}
             disabled={!isAttached}
           >
             -5
           </Button>
           <Button
             variant="outline"
-            onClick={() => handleAngleChange(servoAngle - 1)}
+            onClick={() => {
+              const newAngle = handleAngleChange(servoAngle - 1);
+              sendServoCommand(newAngle);
+            }}
             disabled={!isAttached}
           >
             -1
@@ -292,8 +445,8 @@ export function ControlPanel({
           <Button
             variant="outline"
             onClick={() => {
-              handleAngleChange(90);
-              sendServoCommand(90);
+              const newAngle = handleAngleChange(90);
+              sendServoCommand(newAngle);
             }}
             disabled={!isAttached}
           >
@@ -301,14 +454,20 @@ export function ControlPanel({
           </Button>
           <Button
             variant="outline"
-            onClick={() => handleAngleChange(servoAngle + 1)}
+            onClick={() => {
+              const newAngle = handleAngleChange(servoAngle + 1);
+              sendServoCommand(newAngle);
+            }}
             disabled={!isAttached}
           >
             +1
           </Button>
           <Button
             variant="outline"
-            onClick={() => handleAngleChange(servoAngle + 5)}
+            onClick={() => {
+              const newAngle = handleAngleChange(servoAngle + 5);
+              sendServoCommand(newAngle);
+            }}
             disabled={!isAttached}
           >
             +5
@@ -316,13 +475,11 @@ export function ControlPanel({
         </CardContent>
       </Card>
 
-      {/* Limits & Status Card */}
       <Card>
         <CardHeader>
           <CardTitle>Configuration</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Limits */}
           <div>
             <Label className="block text-sm font-medium mb-2">
               Angle Limits
@@ -334,14 +491,14 @@ export function ControlPanel({
                 min="0"
                 max="180"
                 value={minAngle}
-                onChange={(e) =>
-                  setMinAngle(
-                    Math.max(
-                      0,
-                      Math.min(parseInt(e.target.value, 10) || 0, maxAngle - 1)
-                    )
-                  )
-                }
+                onChange={(e) => {
+                  const newMin = Math.max(
+                    0,
+                    Math.min(parseInt(e.target.value, 10) || 0, maxAngle - 1)
+                  );
+                  setMinAngle(newMin);
+                  if (component) onUpdateLimits(component.id, newMin, maxAngle);
+                }}
                 className="w-24 text-center font-mono"
                 aria-label="Minimum Angle"
               />
@@ -352,23 +509,19 @@ export function ControlPanel({
                 min="0"
                 max="180"
                 value={maxAngle}
-                onChange={(e) =>
-                  setMaxAngle(
-                    Math.min(
-                      180,
-                      Math.max(
-                        parseInt(e.target.value, 10) || 180,
-                        minAngle + 1
-                      )
-                    )
-                  )
-                }
+                onChange={(e) => {
+                  const newMax = Math.min(
+                    180,
+                    Math.max(parseInt(e.target.value, 10) || 180, minAngle + 1)
+                  );
+                  setMaxAngle(newMax);
+                  if (component) onUpdateLimits(component.id, minAngle, newMax);
+                }}
                 className="w-24 text-center font-mono"
                 aria-label="Maximum Angle"
               />
             </div>
           </div>
-          {/* Attach/Detach Toggle */}
           <div className="flex items-center space-x-2 pt-2">
             <Switch
               id={`servo-attach-${component?.id || "servo"}`}
@@ -382,7 +535,6 @@ export function ControlPanel({
             </Label>
           </div>
         </CardContent>
-        {/* Optional Footer for Status */}
         <CardFooter className="flex flex-col items-center pt-4 border-t border-border">
           <p className="text-xs text-muted-foreground">Current Target Angle</p>
           <p className="text-lg font-bold">
@@ -448,12 +600,16 @@ export function ControlPanel({
         )}
 
         {component?.type === "Digital Output" && (
-          <Switch
-            id={`io-output-${component.id}`}
-            label="Set Output State"
-            checked={outputState}
-            onChange={handleOutputToggle}
-          />
+          <div className="flex items-center space-x-2">
+            <Switch
+              id={`io-output-${component.id}`}
+              checked={outputState}
+              onCheckedChange={handleOutputToggle}
+            />
+            <Label htmlFor={`io-output-${component.id}`}>
+              Set Output State
+            </Label>
+          </div>
         )}
       </div>
     );

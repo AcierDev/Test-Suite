@@ -10,6 +10,9 @@ import {
   Download,
   Save,
   List,
+  Pencil,
+  ChevronDown,
+  Check,
 } from "lucide-react";
 import { AddNewCard } from "../components/dashboard/AddNewCard";
 import { ConfigModal } from "../components/dashboard/ConfigModal";
@@ -22,6 +25,38 @@ import {
   NewComponentFormState,
 } from "../components/dashboard/types";
 import { motion, AnimatePresence } from "framer-motion";
+
+// Add necessary imports from shadcn/ui and lucide-react
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 // Type for storing component states received from ESP32
 interface ComponentStates {
@@ -120,6 +155,18 @@ export default function DashboardClient() {
   const [newConfigName, setNewConfigName] = useState("");
   const [isProcessingConfig, setIsProcessingConfig] = useState(false); // Loading/saving/deleting state
 
+  // State for Rename Dialog
+  const [isRenameDialogOpen, setIsRenameDialogOpen] = useState(false);
+  const [renamingConfigId, setRenamingConfigId] = useState<string | null>(null);
+  const [renamingConfigCurrentName, setRenamingConfigCurrentName] =
+    useState("");
+  const [configNewName, setConfigNewName] = useState("");
+
+  // State for Delete Dialog
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deletingConfigId, setDeletingConfigId] = useState<string | null>(null);
+  const [deletingConfigName, setDeletingConfigName] = useState("");
+
   // --- Connection State ---
   const [lastIpOctet, setLastIpOctet] = useState(""); // <-- Add this back
 
@@ -192,11 +239,20 @@ export default function DashboardClient() {
       }
       const configData: FullConfigData = await response.json();
       console.log("Loaded configuration data:", configData);
-      setHardwareConfig(configData.hardware || initialHardwareConfig); // Use loaded hardware config or default
+      setHardwareConfig(configData.hardware || initialHardwareConfig);
       setSelectedConfigName(configData.name);
-      setAppStage("connecting"); // Proceed to connection stage
-      setLastIpOctet(""); // Reset IP octet for connection attempt
-      setConnectionStatus("idle"); // Reset connection status
+
+      // Sync with controller if already connected
+      if (
+        connectionStatus === "connected" &&
+        ws.current?.readyState === WebSocket.OPEN
+      ) {
+        syncConfigWithESP32();
+      }
+
+      setAppStage("connecting");
+      setLastIpOctet("");
+      setConnectionStatus("idle");
     } catch (error) {
       console.error("Failed to load configuration:", error);
       setErrorMessage(
@@ -291,26 +347,23 @@ export default function DashboardClient() {
     }
   };
 
-  const handleDeleteConfig = async () => {
-    if (!selectedConfigId) {
-      setErrorMessage("Please select a configuration to delete.");
+  // --- Handler for Deleting a Configuration (now takes ID) ---
+  const handleDeleteConfig = async (
+    idToDelete: string,
+    nameToDelete: string
+  ) => {
+    if (!idToDelete) {
+      setErrorMessage("Error: No config selected for deletion.");
       return;
     }
-    // Confirmation dialog
-    if (
-      !window.confirm(
-        `Are you sure you want to delete the configuration '${selectedConfigName}'? This cannot be undone.`
-      )
-    ) {
-      return;
-    }
+    // Confirmation is handled by the AlertDialog, so we can proceed
 
-    console.log(`Deleting configuration: ${selectedConfigId}`);
+    console.log(`Deleting configuration: ${idToDelete} ('${nameToDelete}')`);
     setIsProcessingConfig(true);
     setErrorMessage("");
     setInfoMessage("");
     try {
-      const response = await fetch(`/api/configs/${selectedConfigId}`, {
+      const response = await fetch(`/api/configs/${idToDelete}`, {
         method: "DELETE",
       });
       if (!response.ok) {
@@ -340,10 +393,12 @@ export default function DashboardClient() {
 
   // --- ESP32 Synchronization ---
   const syncConfigWithESP32 = useCallback(() => {
-    if (connectionStatus !== "connected") {
-      console.warn("Cannot sync config: WebSocket not connected.");
+    // Check WebSocket readiness directly before sending
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+      console.warn("Cannot sync config: WebSocket not open.");
       return;
     }
+
     console.log("Syncing loaded configuration with ESP32...");
 
     const allComponents: ConfiguredComponent[] =
@@ -361,6 +416,11 @@ export default function DashboardClient() {
       if (hardwareConfig.servos.some((c) => c.id === component.id)) {
         componentGroup = "servos";
         configPayload.pin = component.pins[0];
+        // Add limits if they exist
+        if (component.minAngle !== undefined)
+          configPayload.minAngle = component.minAngle;
+        if (component.maxAngle !== undefined)
+          configPayload.maxAngle = component.maxAngle;
       } else if (hardwareConfig.steppers.some((c) => c.id === component.id)) {
         componentGroup = "steppers";
         configPayload.pulPin = component.pins[0];
@@ -396,7 +456,7 @@ export default function DashboardClient() {
       }
     });
     console.log("Finished sending initial configuration sync to ESP32.");
-  }, [hardwareConfig, connectionStatus, sendMessage]);
+  }, [hardwareConfig, sendMessage]);
 
   // --- WebSocket Message Handling ---
   const handleWebSocketMessage = useCallback(
@@ -439,6 +499,18 @@ export default function DashboardClient() {
           setComponentStates((prevStates) => ({
             ...prevStates,
             [message.id]: message.value,
+          }));
+        } else if (
+          message.type === "stepperUpdate" &&
+          message.id &&
+          message.position !== undefined
+        ) {
+          console.log(
+            `Updating position for stepper ${message.id}: ${message.position}`
+          );
+          setComponentStates((prevStates) => ({
+            ...prevStates,
+            [message.id]: message.position,
           }));
         } else {
           console.log("Received unhandled message type:", message.type);
@@ -627,6 +699,9 @@ export default function DashboardClient() {
           pinsToConfigure = [servoPin];
           typeToConfigure = "Servo";
           configPayload.pin = servoPin;
+          // Add default limits for new servos
+          configPayload.minAngle = 0;
+          configPayload.maxAngle = 180;
           isValid = true;
         }
         break;
@@ -679,6 +754,11 @@ export default function DashboardClient() {
       name: newComponent.name,
       type: typeToConfigure,
       pins: pinsToConfigure,
+      // Add limits to the component data for servos
+      ...(group === "servos" && {
+        minAngle: configPayload.minAngle,
+        maxAngle: configPayload.maxAngle,
+      }),
     };
     // Update local hardware config state
     setHardwareConfig((prev) => ({
@@ -790,6 +870,32 @@ export default function DashboardClient() {
     setSelectedComponent(null);
   };
 
+  // --- Callback to update servo limits in local state ---
+  const handleServoLimitUpdate = useCallback(
+    (id: string, minAngle: number, maxAngle: number) => {
+      setHardwareConfig((prev) => {
+        const newServos = prev.servos.map((servo) => {
+          if (servo.id === id) {
+            return { ...servo, minAngle, maxAngle };
+          }
+          return servo;
+        });
+        return { ...prev, servos: newServos };
+      });
+      // Indicate unsaved changes - maybe a visual cue?
+      // Note: We don't send this update live to ESP32 currently,
+      // limits are sent during configure/sync.
+      console.log(
+        `Updated limits for servo ${id} locally: ${minAngle}-${maxAngle}`
+      );
+      setInfoMessage(
+        "Servo limits updated locally. Save configuration to persist."
+      );
+      setTimeout(() => setInfoMessage(""), 3000);
+    },
+    [] // No dependencies needed as it only uses setters and IDs/values
+  );
+
   // --- Define constants/components used in Dashboard stage ---
   const addNewCardLabel =
     activeGroup === "servos"
@@ -846,6 +952,84 @@ export default function DashboardClient() {
     },
   };
 
+  // --- Handler for Renaming a Configuration ---
+  const handleRenameConfig = async () => {
+    const trimmedNewName = configNewName.trim();
+    if (
+      !renamingConfigId ||
+      !trimmedNewName ||
+      trimmedNewName === renamingConfigCurrentName
+    ) {
+      setErrorMessage(
+        !renamingConfigId
+          ? "Error: No config selected for rename."
+          : !trimmedNewName
+          ? "Please enter a valid new name."
+          : "New name is the same as the current name."
+      );
+      // Keep dialog open for correction if name is invalid/same
+      if (!renamingConfigId) setIsRenameDialogOpen(false); // Close if ID somehow missing
+      return;
+    }
+
+    console.log(
+      `Renaming config ${renamingConfigId} from '${renamingConfigCurrentName}' to '${trimmedNewName}'`
+    );
+    setIsProcessingConfig(true);
+    setErrorMessage(""); // Clear error message from previous attempt in dialog
+    setInfoMessage("");
+
+    try {
+      const response = await fetch(`/api/configs/${renamingConfigId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: trimmedNewName }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || `HTTP error! status: ${response.status}`
+        );
+      }
+
+      setAvailableConfigs((prev) =>
+        prev
+          .map((config) =>
+            config._id === renamingConfigId
+              ? { ...config, name: trimmedNewName }
+              : config
+          )
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+
+      if (selectedConfigId === renamingConfigId) {
+        setSelectedConfigName(trimmedNewName);
+      }
+
+      setInfoMessage(`Configuration renamed to '${trimmedNewName}'.`);
+      setTimeout(() => setInfoMessage(""), 3000);
+      setIsRenameDialogOpen(false); // Close dialog on success
+    } catch (error) {
+      console.error("Failed to rename configuration:", error);
+      setErrorMessage(
+        // Set error message to display in dialog
+        `Failed to rename: ${(error as Error).message}`
+      );
+      // Keep dialog open on error
+      // setIsRenameDialogOpen(false);
+    } finally {
+      setIsProcessingConfig(false);
+      // Reset state only if dialog is closed (on success or manual cancel)
+      if (!isRenameDialogOpen) {
+        setRenamingConfigId(null);
+        setRenamingConfigCurrentName("");
+        setConfigNewName("");
+        setErrorMessage(""); // Clear error message when dialog fully closes
+      }
+    }
+  };
+
   // --- Main Return Logic with Conditional Rendering ---
   return (
     <>
@@ -896,60 +1080,120 @@ export default function DashboardClient() {
               )}
             </AnimatePresence>
 
-            {/* Load Existing Configuration */}
+            {/* Load Existing Configuration - REVISED UI */}
             <div className="mb-6 space-y-3">
-              <label
-                htmlFor="config-select"
-                className="block text-sm font-medium text-gray-300"
-              >
-                Load Existing Configuration
-              </label>
-              <div className="flex gap-2">
-                <select
-                  id="config-select"
-                  value={selectedConfigId || ""}
-                  onChange={(e) => {
-                    setSelectedConfigId(e.target.value);
-                    const selected = availableConfigs.find(
-                      (c) => c._id === e.target.value
-                    );
-                    setSelectedConfigName(selected ? selected.name : "");
-                  }}
-                  disabled={isProcessingConfig}
-                  className="flex-grow rounded-md border border-gray-600 px-3 py-2 text-white bg-gray-700 focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
-                >
-                  <option value="" disabled>
-                    -- Select a Configuration --
-                  </option>
-                  {availableConfigs.map((config) => (
-                    <option key={config._id} value={config._id}>
-                      {config.name}
-                    </option>
-                  ))}
-                </select>
+              <Label className="block text-sm font-medium text-gray-300">
+                Load Configuration
+              </Label>
+              <div className="flex gap-2 items-center">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="flex-grow justify-between bg-gray-700 border-gray-600 hover:bg-gray-600 text-white" // Ensure text color
+                      disabled={isProcessingConfig} // Disable trigger during any processing
+                    >
+                      <span className="truncate pr-2">
+                        {selectedConfigName || "-- Select Configuration --"}
+                      </span>
+                      <ChevronDown className="h-4 w-4 opacity-50" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent className="w-[--radix-dropdown-menu-trigger-width] bg-gray-700 border-gray-600 text-white">
+                    <DropdownMenuLabel>
+                      Available Configurations
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator className="bg-gray-600" />
+                    {availableConfigs.length === 0 && (
+                      <DropdownMenuItem
+                        disabled
+                        className="italic text-gray-400"
+                      >
+                        No configurations found.
+                      </DropdownMenuItem>
+                    )}
+                    {availableConfigs.map((config) => (
+                      <DropdownMenuItem
+                        key={config._id}
+                        className="flex justify-between items-center group hover:bg-gray-600 focus:bg-gray-600 relative pr-8" // Added relative pr-8
+                        onSelect={(event) => {
+                          const target = event.target as HTMLElement;
+                          if (
+                            target.closest(
+                              'button[aria-label^="Rename"], button[aria-label^="Delete"]'
+                            )
+                          ) {
+                            return;
+                          }
+                          setSelectedConfigId(config._id);
+                          setSelectedConfigName(config.name);
+                          console.log(
+                            `Selected config: ${config.name} (ID: ${config._id})`
+                          );
+                        }}
+                      >
+                        {/* Add Check mark if selected */}
+                        {selectedConfigId === config._id && (
+                          <Check className="absolute left-2 h-4 w-4 text-blue-400" />
+                        )}
+                        <span className="truncate flex-grow pl-6">
+                          {config.name}
+                        </span>{" "}
+                        {/* Added pl-6 */}
+                        {/* Action Buttons Container */}
+                        <div className="flex items-center ml-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity duration-150">
+                          {/* Rename Button */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-gray-400 hover:text-white hover:bg-gray-500/50"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRenamingConfigId(config._id);
+                              setRenamingConfigCurrentName(config.name);
+                              setConfigNewName(config.name);
+                              setErrorMessage("");
+                              setIsRenameDialogOpen(true);
+                            }}
+                            aria-label={`Rename ${config.name}`}
+                            disabled={isProcessingConfig}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          {/* Delete Button */}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0 text-red-500/80 hover:text-red-400 hover:bg-red-900/30"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeletingConfigId(config._id);
+                              setDeletingConfigName(config.name);
+                              setIsDeleteDialogOpen(true);
+                            }}
+                            aria-label={`Delete ${config.name}`}
+                            disabled={isProcessingConfig}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* Explicit Load Button */}
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   onClick={handleLoadConfig}
-                  disabled={!selectedConfigId || isProcessingConfig}
+                  disabled={!selectedConfigId || isProcessingConfig} // Keep this logic
                   className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
                 >
-                  {isProcessingConfig ? "Loading..." : "Load Selected"}
+                  {/* Loading indicator still generic as multiple actions can disable it */}
+                  {isProcessingConfig ? "Processing..." : "Load"}
                 </motion.button>
               </div>
-              {selectedConfigId && (
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={handleDeleteConfig}
-                  disabled={isProcessingConfig}
-                  className="w-full mt-1 px-3 py-1.5 text-xs bg-red-800 text-red-100 rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
-                >
-                  {isProcessingConfig
-                    ? "Deleting..."
-                    : `Delete '${selectedConfigName}'`}
-                </motion.button>
-              )}
             </div>
 
             <hr className="border-gray-600 my-6" />
@@ -1517,6 +1761,7 @@ export default function DashboardClient() {
               }
               activeGroup={activeGroup}
               sendMessage={sendMessage}
+              onUpdateLimits={handleServoLimitUpdate} // Pass the callback
             />
             <div className="space-y-6">
               <AnimatePresence mode="wait">
@@ -2025,6 +2270,129 @@ export default function DashboardClient() {
           Invalid application state.
         </div>
       )}
+
+      {/* Rename Dialog */}
+      <Dialog
+        open={isRenameDialogOpen}
+        onOpenChange={(open) => {
+          setIsRenameDialogOpen(open);
+          // Reset error when closing dialog manually
+          if (!open) {
+            setErrorMessage("");
+            setRenamingConfigId(null);
+            setRenamingConfigCurrentName("");
+            setConfigNewName("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px] bg-gray-800 border-gray-700">
+          <DialogHeader>
+            <DialogTitle className="text-white">
+              Rename Configuration
+            </DialogTitle>
+            <DialogDescription className="text-gray-400">
+              Change the name for '{renamingConfigCurrentName}'.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="name" className="text-right text-gray-300">
+                New Name
+              </Label>
+              <Input
+                id="name"
+                value={configNewName}
+                onChange={(e) => setConfigNewName(e.target.value)}
+                className="col-span-3 bg-gray-700 border-gray-600 text-white focus-visible:ring-blue-500" // Added focus style
+                disabled={isProcessingConfig}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    !isProcessingConfig &&
+                    configNewName.trim() &&
+                    configNewName.trim() !== renamingConfigCurrentName
+                  )
+                    handleRenameConfig();
+                }} // Allow enter submit
+              />
+            </div>
+            {/* Display error message inside dialog - slight spacing adjustment */}
+            {errorMessage && (
+              <p className="col-span-4 text-red-400 text-sm px-1 mt-1">
+                {errorMessage}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button
+                variant="outline"
+                className="text-gray-300 border-gray-600 hover:bg-gray-700"
+              >
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              type="submit" // Make it type submit
+              onClick={handleRenameConfig}
+              disabled={
+                isProcessingConfig ||
+                !configNewName.trim() ||
+                configNewName.trim() === renamingConfigCurrentName
+              }
+              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+            >
+              {isProcessingConfig ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={setIsDeleteDialogOpen}
+      >
+        <AlertDialogContent className="bg-gray-800 border-gray-700">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">
+              Are you absolutely sure?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-gray-400">
+              This action cannot be undone. This will permanently delete the
+              <strong className="text-red-400"> '{deletingConfigName}' </strong>
+              configuration.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel asChild>
+              <Button
+                variant="outline"
+                className="text-gray-300 border-gray-600 hover:bg-gray-700"
+              >
+                Cancel
+              </Button>
+            </AlertDialogCancel>
+            <AlertDialogAction asChild>
+              <Button
+                variant="destructive" // Use destructive variant
+                className="bg-red-700 hover:bg-red-600"
+                onClick={(e) => {
+                  // e.preventDefault(); // Not needed for AlertDialogAction if not in a form
+                  if (deletingConfigId && deletingConfigName) {
+                    handleDeleteConfig(deletingConfigId, deletingConfigName);
+                  }
+                }}
+                disabled={isProcessingConfig}
+              >
+                {isProcessingConfig
+                  ? "Deleting..."
+                  : "Yes, Delete Configuration"}
+              </Button>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

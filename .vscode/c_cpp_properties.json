@@ -9,6 +9,7 @@
             "name": "PlatformIO",
             "includePath": [
                 "/Users/steelebenjamin/Documents/Everwood/Code/Test Suite/microcontroller/src",
+                "/Users/steelebenjamin/Documents/Everwood/Code/Test Suite/.pio/libdeps/esp32/AccelStepper/src",
                 "/Users/steelebenjamin/Documents/Everwood/Code/Test Suite/.pio/libdeps/esp32/ESP32Servo/src",
                 "/Users/steelebenjamin/Documents/Everwood/Code/Test Suite/.pio/libdeps/esp32/ESPAsyncWebServer/src",
                 "/Users/steelebenjamin/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src",
@@ -249,6 +250,7 @@
                 "limitSymbolsToIncludedHeaders": true,
                 "path": [
                     "/Users/steelebenjamin/Documents/Everwood/Code/Test Suite/microcontroller/src",
+                    "/Users/steelebenjamin/Documents/Everwood/Code/Test Suite/.pio/libdeps/esp32/AccelStepper/src",
                     "/Users/steelebenjamin/Documents/Everwood/Code/Test Suite/.pio/libdeps/esp32/ESP32Servo/src",
                     "/Users/steelebenjamin/Documents/Everwood/Code/Test Suite/.pio/libdeps/esp32/ESPAsyncWebServer/src",
                     "/Users/steelebenjamin/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src",
