@@ -5,7 +5,7 @@
   "scripts": {
     "dev:find-ip": "tsx watch scripts/find-ip.ts",
     "dev:next": "next dev",
-    "dev": "pio run -t upload && concurrently \"npm:dev:find-ip\" \"npm:dev:next\" ",
+    "dev": "pio run -t upload && concurrently \"npm:dev:find-ip\" \"npm:dev:next\" \"wait-on -t 60000 http://localhost:3000 && open-cli http://localhost:3000\"",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
